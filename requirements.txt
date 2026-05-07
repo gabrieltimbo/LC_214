@@ -3,3 +3,4 @@ feedparser
 pandas
 python-dateutil
 xlsxwriter
+ddgs
