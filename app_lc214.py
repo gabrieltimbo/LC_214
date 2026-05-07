@@ -266,7 +266,7 @@ termo_principal = st.sidebar.text_input(
 novos_termos = st.sidebar.text_area(
     "Termos extras",
     value="",
-    placeholder="Exemplo:\ncrédito presumido\ncashback\nalíquota de referência"
+    placeholder="Exemplo:\ncrédito presumido\nalíquota efetiva"
 )
 
 data_inicio = st.sidebar.date_input(
