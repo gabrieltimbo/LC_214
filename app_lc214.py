@@ -43,13 +43,23 @@ TERMOS_PADRAO = [
 ]
 
 RSS_FEEDS = [
+    # Oficiais
     "https://www.gov.br/receitafederal/pt-br/assuntos/noticias/rss.xml",
     "https://www.gov.br/fazenda/pt-br/assuntos/noticias/rss.xml",
     "https://www.gov.br/planalto/pt-br/acompanhe-o-planalto/noticias/rss.xml",
+
+    # Legislativo
     "https://www12.senado.leg.br/noticias/rss",
     "https://www.camara.leg.br/noticias/rss",
-    "https://valor.globo.com/rss/",
+
+    # Grupo Globo / G1
     "https://g1.globo.com/rss/g1/economia/",
+    "https://g1.globo.com/rss/g1/politica/",
+    "https://g1.globo.com/rss/g1/mundo/",
+    "https://g1.globo.com/rss/g1/ciencia-e-saude/",
+
+    # Mídia econômica
+    "https://valor.globo.com/rss/",
     "https://www.cnnbrasil.com.br/economia/feed/",
     "https://www.contabeis.com.br/rss/noticias/",
     "https://www.jota.info/feed",
