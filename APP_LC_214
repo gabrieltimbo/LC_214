@@ -1,0 +1,402 @@
+# -*- coding: utf-8 -*-
+
+import streamlit as st
+import feedparser
+import pandas as pd
+from datetime import datetime, timedelta, date
+from dateutil import parser
+from io import BytesIO
+
+# ============================================================
+# CONFIGURAÇÕES GERAIS
+# ============================================================
+
+st.set_page_config(
+    page_title="Tax Reform Monitor | LC 214",
+    page_icon="⚖️",
+    layout="wide"
+)
+
+SENHA_APP = "TAX2026"  # altere a senha aqui
+
+TERMOS_PADRAO = [
+    "LC 214",
+    "Lei Complementar 214",
+    "Lei Complementar nº 214",
+    "Reforma Tributária",
+    "IBS",
+    "CBS",
+    "Imposto Seletivo",
+    "split payment",
+    "Comitê Gestor do IBS",
+    "Nota Técnica Reforma Tributária",
+    "Reforma Tributária do Consumo",
+    "Regime específico",
+    "documento fiscal eletrônico",
+    "NF-e Reforma Tributária",
+    "CBS IBS"
+]
+
+RSS_FEEDS = [
+    "https://www.gov.br/receitafederal/pt-br/assuntos/noticias/rss.xml",
+    "https://www.gov.br/fazenda/pt-br/assuntos/noticias/rss.xml",
+    "https://www.gov.br/planalto/pt-br/acompanhe-o-planalto/noticias/rss.xml",
+    "https://www12.senado.leg.br/noticias/rss",
+    "https://www.camara.leg.br/noticias/rss",
+    "https://valor.globo.com/rss/",
+    "https://g1.globo.com/rss/g1/economia/",
+    "https://www.cnnbrasil.com.br/economia/feed/",
+    "https://www.contabeis.com.br/rss/noticias/",
+    "https://www.jota.info/feed",
+]
+
+# ============================================================
+# CSS
+# ============================================================
+
+st.markdown(
+    """
+    <style>
+    .main {
+        background-color: #f8fafc;
+    }
+    .title-box {
+        background: linear-gradient(135deg, #0f172a, #1d4ed8);
+        padding: 28px;
+        border-radius: 20px;
+        color: white;
+        margin-bottom: 25px;
+    }
+    .title-box h1 {
+        margin: 0;
+        font-size: 34px;
+    }
+    .title-box p {
+        margin-top: 8px;
+        color: #dbeafe;
+        font-size: 16px;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
+# ============================================================
+# HEADER
+# ============================================================
+
+st.markdown(
+    """
+    <div class="title-box">
+        <h1>⚖️ Tax Reform Monitor</h1>
+        <p>Buscador de notícias e atualizações sobre LC 214, Reforma Tributária, IBS, CBS e Imposto Seletivo.</p>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
+
+# ============================================================
+# AUTENTICAÇÃO
+# ============================================================
+
+senha_input = st.text_input("Digite a senha para acessar o app:", type="password")
+
+if senha_input != SENHA_APP:
+    st.warning("Digite a senha correta para acessar o monitor.")
+    st.stop()
+
+# ============================================================
+# SIDEBAR
+# ============================================================
+
+st.sidebar.title("🔎 Filtros de Busca")
+
+termo_principal = st.sidebar.text_input(
+    "Tema principal",
+    value="LC 214 Reforma Tributária"
+)
+
+novos_termos = st.sidebar.text_area(
+    "Adicionar termos extras",
+    value="",
+    placeholder="Exemplo:\ncrédito presumido\ncashback\nalíquota de referência"
+)
+
+data_inicio = st.sidebar.date_input(
+    "Data inicial",
+    value=date(datetime.now().year, 1, 1)
+)
+
+data_fim = st.sidebar.date_input(
+    "Data final",
+    value=date.today()
+)
+
+usar_termos_padrao = st.sidebar.checkbox(
+    "Usar termos padrão de Reforma Tributária",
+    value=True
+)
+
+mostrar_feeds = st.sidebar.checkbox(
+    "Mostrar fontes consultadas",
+    value=False
+)
+
+# ============================================================
+# TERMOS
+# ============================================================
+
+termos_extras = [
+    termo.strip()
+    for termo in novos_termos.replace("\n", ",").split(",")
+    if termo.strip()
+]
+
+TERMOS = []
+
+if usar_termos_padrao:
+    TERMOS.extend(TERMOS_PADRAO)
+
+if termo_principal:
+    TERMOS.append(termo_principal)
+
+TERMOS.extend(termos_extras)
+
+TERMOS = list(dict.fromkeys(TERMOS))
+
+# ============================================================
+# FUNÇÕES
+# ============================================================
+
+def tratar_data(entry):
+    data_publicacao = None
+
+    campos_data = ["published", "updated", "created"]
+
+    for campo in campos_data:
+        if campo in entry:
+            try:
+                data_publicacao = parser.parse(entry[campo])
+                if data_publicacao.tzinfo is not None:
+                    data_publicacao = data_publicacao.replace(tzinfo=None)
+                break
+            except Exception:
+                pass
+
+    return data_publicacao
+
+
+def calcular_relevancia(texto, termos):
+    texto_lower = texto.lower()
+    encontrados = []
+
+    for termo in termos:
+        if termo.lower() in texto_lower:
+            encontrados.append(termo)
+
+    score = len(encontrados)
+
+    return score, ", ".join(encontrados)
+
+
+def buscar_rss(feed_url, data_inicio, data_fim, termos):
+    parsed = feedparser.parse(feed_url)
+    resultados = []
+
+    for entry in parsed.entries:
+        titulo = entry.get("title", "")
+        resumo = entry.get("summary", "")
+        link = entry.get("link", "")
+        data_publicacao = tratar_data(entry)
+
+        conteudo = f"{titulo} {resumo}"
+
+        score, termos_encontrados = calcular_relevancia(conteudo, termos)
+
+        if score == 0:
+            continue
+
+        if data_publicacao:
+            data_pub_date = data_publicacao.date()
+
+            if not (data_inicio <= data_pub_date <= data_fim):
+                continue
+        else:
+            data_pub_date = None
+
+        resultados.append({
+            "Fonte": feed_url,
+            "Título": titulo,
+            "Data": data_pub_date,
+            "Resumo": resumo,
+            "Link": link,
+            "Termos encontrados": termos_encontrados,
+            "Score": score
+        })
+
+    return resultados
+
+
+def gerar_excel(df):
+    output = BytesIO()
+
+    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+        df.to_excel(writer, index=False, sheet_name="Resultados")
+
+        workbook = writer.book
+        worksheet = writer.sheets["Resultados"]
+
+        header_format = workbook.add_format({
+            "bold": True,
+            "bg_color": "#1D4ED8",
+            "font_color": "white",
+            "border": 1
+        })
+
+        text_format = workbook.add_format({
+            "text_wrap": True,
+            "valign": "top"
+        })
+
+        for col_num, value in enumerate(df.columns.values):
+            worksheet.write(0, col_num, value, header_format)
+
+        worksheet.set_column("A:A", 45, text_format)
+        worksheet.set_column("B:B", 60, text_format)
+        worksheet.set_column("C:C", 15, text_format)
+        worksheet.set_column("D:D", 90, text_format)
+        worksheet.set_column("E:E", 70, text_format)
+        worksheet.set_column("F:F", 45, text_format)
+        worksheet.set_column("G:G", 10, text_format)
+
+    output.seek(0)
+    return output
+
+# ============================================================
+# TELA PRINCIPAL
+# ============================================================
+
+col1, col2, col3 = st.columns(3)
+
+with col1:
+    st.metric("Termos monitorados", len(TERMOS))
+
+with col2:
+    st.metric("Fontes RSS", len(RSS_FEEDS))
+
+with col3:
+    dias_periodo = (data_fim - data_inicio).days
+    st.metric("Período analisado", f"{dias_periodo} dias")
+
+st.subheader("📌 Termos de busca")
+st.write(", ".join(TERMOS))
+
+if mostrar_feeds:
+    st.subheader("🌐 Fontes consultadas")
+    for feed in RSS_FEEDS:
+        st.write("-", feed)
+
+# ============================================================
+# BOTÃO DE BUSCA
+# ============================================================
+
+if st.button("🚀 Buscar Atualizações", use_container_width=True):
+    if data_inicio > data_fim:
+        st.error("A data inicial não pode ser maior que a data final.")
+        st.stop()
+
+    todos_resultados = []
+
+    with st.spinner("Buscando atualizações em fontes oficiais e notícias..."):
+        for feed in RSS_FEEDS:
+            try:
+                resultados_feed = buscar_rss(
+                    feed_url=feed,
+                    data_inicio=data_inicio,
+                    data_fim=data_fim,
+                    termos=TERMOS
+                )
+                todos_resultados.extend(resultados_feed)
+
+            except Exception as e:
+                st.warning(f"Erro ao processar fonte: {feed} | {e}")
+
+    df = pd.DataFrame(todos_resultados)
+
+    if df.empty:
+        st.warning("Nenhuma atualização encontrada para os filtros selecionados.")
+    else:
+        df = df.drop_duplicates(subset=["Título", "Link"])
+        df = df.sort_values(by=["Score", "Data"], ascending=[False, False])
+
+        st.success(f"{len(df)} atualizações encontradas.")
+
+        col_a, col_b, col_c = st.columns(3)
+
+        with col_a:
+            st.metric("Resultados", len(df))
+
+        with col_b:
+            st.metric("Maior score", int(df["Score"].max()))
+
+        with col_c:
+            fontes_unicas = df["Fonte"].nunique()
+            st.metric("Fontes com resultado", fontes_unicas)
+
+        st.subheader("📰 Resultados encontrados")
+
+        st.data_editor(
+            df,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Link": st.column_config.LinkColumn("Abrir link"),
+                "Resumo": st.column_config.TextColumn("Resumo", width="large"),
+                "Score": st.column_config.ProgressColumn(
+                    "Score",
+                    min_value=0,
+                    max_value=max(5, int(df["Score"].max()))
+                )
+            },
+            disabled=True
+        )
+
+        st.subheader("📊 Temas mais encontrados")
+
+        termos_lista = []
+
+        for item in df["Termos encontrados"]:
+            for termo in str(item).split(","):
+                termo = termo.strip()
+                if termo:
+                    termos_lista.append(termo)
+
+        if termos_lista:
+            df_termos = (
+                pd.Series(termos_lista)
+                .value_counts()
+                .reset_index()
+            )
+            df_termos.columns = ["Termo", "Ocorrências"]
+
+            st.bar_chart(df_termos.set_index("Termo"))
+
+        excel_file = gerar_excel(df)
+
+        st.download_button(
+            label="📥 Baixar Excel",
+            data=excel_file,
+            file_name=f"tax_reform_monitor_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True
+        )
+
+# ============================================================
+# RODAPÉ
+# ============================================================
+
+st.divider()
+
+st.caption(
+    "Tax Reform Monitor | Protótipo interno para acompanhamento de atualizações sobre LC 214 e Reforma Tributária."
+)
