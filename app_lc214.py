@@ -7,6 +7,7 @@ from datetime import datetime, date
 from dateutil import parser
 from ddgs import DDGS
 from openai import OpenAI
+import trafilatura
 
 # ============================================================
 # CONFIGURAÇÃO DA PÁGINA
@@ -175,13 +176,26 @@ def calcular_relevancia(texto, termos):
     return len(encontrados), ", ".join(encontrados)
 
 
+def limpar_html(texto):
+    if not texto:
+        return ""
+
+    return (
+        texto.replace("<p>", "")
+        .replace("</p>", "")
+        .replace("<br>", "")
+        .replace("<br/>", "")
+        .replace("<br />", "")
+    )
+
+
 def buscar_rss(feed_url, data_inicio, data_fim, termos):
     parsed = feedparser.parse(feed_url)
     resultados = []
 
     for entry in parsed.entries:
         titulo = entry.get("title", "")
-        resumo = entry.get("summary", "")
+        resumo = limpar_html(entry.get("summary", ""))
         link = entry.get("link", "")
         data_publicacao = tratar_data(entry)
 
@@ -256,35 +270,99 @@ def openai_disponivel():
     return "OPENAI_API_KEY" in st.secrets and bool(st.secrets["OPENAI_API_KEY"])
 
 
+def extrair_texto_link(link):
+    try:
+        downloaded = trafilatura.fetch_url(link)
+
+        if not downloaded:
+            return ""
+
+        texto = trafilatura.extract(
+            downloaded,
+            include_comments=False,
+            include_tables=False,
+            favor_recall=True
+        )
+
+        return texto or ""
+
+    except Exception:
+        return ""
+
+
 def analisar_noticia_com_ia(titulo, resumo, link, termos_encontrados):
     client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
-    prompt = f"""
-    Analise a notícia abaixo em português do Brasil.
+    texto_completo = extrair_texto_link(link)
 
-    Título:
+    if texto_completo and len(texto_completo.strip()) > 300:
+        conteudo_base = texto_completo[:10000]
+        tipo_conteudo = "Texto completo extraído da página"
+    else:
+        conteudo_base = resumo
+        tipo_conteudo = "Apenas título e resumo curto disponíveis"
+
+    prompt = f"""
+    Você deve fazer uma análise executiva e aprofundada da notícia abaixo.
+
+    IMPORTANTE:
+    - Use somente as informações disponíveis.
+    - Não invente dados, datas, números, decisões ou obrigações que não estejam no conteúdo.
+    - Se o conteúdo estiver limitado, deixe claro na análise.
+    - O objetivo é ajudar um time de Tax, Controladoria, Fiscal e Financeiro a entender impacto e prioridade.
+
+    TÍTULO:
     {titulo}
 
-    Resumo disponível:
-    {resumo}
-
-    Link:
+    LINK:
     {link}
 
-    Termos encontrados:
+    TIPO DE CONTEÚDO DISPONÍVEL:
+    {tipo_conteudo}
+
+    TERMOS ENCONTRADOS:
     {termos_encontrados}
 
-    Retorne exatamente neste formato:
+    CONTEÚDO DISPONÍVEL:
+    {conteudo_base}
 
-    **Resumo executivo:** explique em poucas linhas o conteúdo da notícia.
+    Gere a análise no formato abaixo:
 
-    **Relevância:** Alta, Média ou Baixa.
+    ### 1. Resumo executivo
+    Faça um resumo claro em 5 a 8 linhas, explicando o assunto principal e o contexto da notícia.
 
-    **Impacto possível:** explique se pode ter impacto tributário, regulatório, operacional, fiscal, contábil ou estratégico.
+    ### 2. Problema central
+    Explique qual é o risco, discussão, mudança, conflito ou oportunidade apresentada.
 
-    **Por que importa:** explique de forma objetiva por que o time deveria acompanhar essa notícia.
+    ### 3. Impacto potencial para empresas
+    Separe a análise nos tópicos abaixo:
+    - Tributário
+    - Fiscal/contábil
+    - Jurídico/regulatório
+    - Processos internos
+    - Compliance e governança
 
-    **Ação sugerida:** diga se vale monitorar, compartilhar com o time, aprofundar análise ou apenas arquivar.
+    ### 4. Riscos práticos
+    Liste de 3 a 6 riscos práticos que uma empresa deveria observar.
+
+    ### 5. Oportunidades ou ações preventivas
+    Liste ações que a empresa poderia tomar para se preparar ou acompanhar o tema.
+
+    ### 6. Perguntas para aprofundamento interno
+    Crie de 4 a 6 perguntas que o time deveria investigar.
+
+    ### 7. Classificação de relevância
+    Classifique como Alta, Média ou Baixa.
+    Justifique a classificação em poucas linhas.
+
+    ### 8. Recomendação executiva
+    Diga objetivamente se a notícia deve ser:
+    - apenas monitorada
+    - compartilhada com o time
+    - levada para discussão interna
+    - virar análise técnica específica
+
+    Use linguagem profissional, objetiva e útil para ambiente corporativo.
     """
 
     resposta = client.chat.completions.create(
@@ -292,15 +370,15 @@ def analisar_noticia_com_ia(titulo, resumo, link, termos_encontrados):
         messages=[
             {
                 "role": "system",
-                "content": "Você é um analista de notícias tributárias e regulatórias no Brasil, com foco em Reforma Tributária, LC 214, IBS, CBS e impactos para empresas."
+                "content": "Você é um analista sênior de notícias tributárias, regulatórias e empresariais no Brasil, com foco em Reforma Tributária, LC 214, IBS, CBS e impactos para empresas."
             },
             {
                 "role": "user",
                 "content": prompt
             }
         ],
-        max_tokens=600,
-        temperature=0.2
+        max_tokens=1600,
+        temperature=0.25
     )
 
     return resposta.choices[0].message.content
@@ -542,7 +620,7 @@ if not df.empty:
     )
 
     if usar_ia:
-        st.subheader("🤖 Análise das notícias com IA")
+        st.subheader("🤖 Análise aprofundada das notícias com IA")
 
         if not openai_disponivel():
             st.error("OPENAI_API_KEY não encontrada no Secrets.")
@@ -556,8 +634,8 @@ if not df.empty:
                     st.write(row["Resumo"])
                     st.write(row["Link"])
 
-                    if st.button("Gerar resumo com IA", key=f"btn_ia_{idx}"):
-                        with st.spinner("Analisando notícia com IA..."):
+                    if st.button("Gerar análise aprofundada com IA", key=f"btn_ia_{idx}"):
+                        with st.spinner("Extraindo conteúdo da página e analisando com IA..."):
                             try:
                                 analise = analisar_noticia_com_ia(
                                     titulo=row["Título"],
