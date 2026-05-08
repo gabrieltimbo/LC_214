@@ -6,6 +6,7 @@ import pandas as pd
 from datetime import datetime, date
 from dateutil import parser
 from ddgs import DDGS
+from openai import OpenAI
 
 # ============================================================
 # CONFIGURAÇÃO DA PÁGINA
@@ -17,9 +18,6 @@ st.set_page_config(
     layout="wide"
 )
 
-# Senha segura para Streamlit Cloud:
-# Em Settings > Secrets, coloque:
-# APP_PASSWORD = "TAX2026"
 SENHA_APP = ("TAX2026")
 
 # ============================================================
@@ -43,22 +41,13 @@ TERMOS_PADRAO = [
 ]
 
 RSS_FEEDS = [
-    # Oficiais
     "https://www.gov.br/receitafederal/pt-br/assuntos/noticias/rss.xml",
     "https://www.gov.br/fazenda/pt-br/assuntos/noticias/rss.xml",
     "https://www.gov.br/planalto/pt-br/acompanhe-o-planalto/noticias/rss.xml",
-
-    # Legislativo
     "https://www12.senado.leg.br/noticias/rss",
     "https://www.camara.leg.br/noticias/rss",
-
-    # Grupo Globo / G1
     "https://g1.globo.com/rss/g1/economia/",
     "https://g1.globo.com/rss/g1/politica/",
-    "https://g1.globo.com/rss/g1/mundo/",
-    "https://g1.globo.com/rss/g1/ciencia-e-saude/",
-
-    # Mídia econômica
     "https://valor.globo.com/rss/",
     "https://www.cnnbrasil.com.br/economia/feed/",
     "https://www.contabeis.com.br/rss/noticias/",
@@ -72,14 +61,8 @@ RSS_FEEDS = [
 st.markdown(
     """
     <style>
-    .main {
-        background-color: #f8fafc;
-    }
-
-    .block-container {
-        padding-top: 1.8rem;
-        padding-bottom: 2rem;
-    }
+    .main { background-color: #f8fafc; }
+    .block-container { padding-top: 1.8rem; padding-bottom: 2rem; }
 
     .hero {
         background: linear-gradient(135deg, #111827 0%, #1f2937 45%, #2563eb 100%);
@@ -194,7 +177,6 @@ def buscar_rss(feed_url, data_inicio, data_fim, termos):
         data_publicacao = tratar_data(entry)
 
         conteudo = f"{titulo} {resumo} {link}"
-
         score, termos_encontrados = calcular_relevancia(conteudo, termos)
 
         if score == 0:
@@ -202,7 +184,6 @@ def buscar_rss(feed_url, data_inicio, data_fim, termos):
 
         if data_publicacao:
             data_pub_date = data_publicacao.date()
-
             if not (data_inicio <= data_pub_date <= data_fim):
                 continue
         else:
@@ -240,7 +221,6 @@ def buscar_ddgs(query, termos, max_results=20):
                 link = item.get("href", "")
 
                 conteudo = f"{titulo} {resumo} {link}"
-
                 score, termos_encontrados = calcular_relevancia(conteudo, termos)
 
                 if score == 0:
@@ -261,6 +241,61 @@ def buscar_ddgs(query, termos, max_results=20):
         st.warning(f"Erro na busca web gratuita: {e}")
 
     return resultados
+
+
+def openai_disponivel():
+    return "OPENAI_API_KEY" in st.secrets and st.secrets["OPENAI_API_KEY"]
+
+
+def analisar_noticia_com_ia(titulo, resumo, link, termos_encontrados):
+    client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+
+    prompt = f"""
+    Analise a notícia abaixo em português do Brasil.
+
+    Título:
+    {titulo}
+
+    Resumo disponível:
+    {resumo}
+
+    Link:
+    {link}
+
+    Termos encontrados:
+    {termos_encontrados}
+
+    Retorne exatamente neste formato:
+
+    **Resumo executivo:** explique em poucas linhas o conteúdo da notícia.
+
+    **Relevância:** Alta, Média ou Baixa.
+
+    **Impacto possível:** explique se pode ter impacto tributário, regulatório, operacional, fiscal, contábil ou estratégico.
+
+    **Por que importa:** explique de forma objetiva por que o time deveria acompanhar essa notícia.
+
+    **Ação sugerida:** diga se vale monitorar, compartilhar com o time, aprofundar análise ou apenas arquivar.
+    """
+
+    resposta = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {
+                "role": "system",
+                "content": "Você é um analista de notícias tributárias e regulatórias no Brasil, com foco em Reforma Tributária, LC 214, IBS, CBS e impactos para empresas."
+            },
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ],
+        max_tokens=600,
+        temperature=0.2
+    )
+
+    return resposta.choices[0].message.content
+
 
 # ============================================================
 # SIDEBAR
@@ -301,6 +336,28 @@ max_resultados_web = st.sidebar.slider(
 )
 
 mostrar_fontes = st.sidebar.checkbox("Mostrar fontes RSS", value=False)
+
+st.sidebar.divider()
+st.sidebar.subheader("🤖 Inteligência Artificial")
+
+usar_ia = st.sidebar.toggle(
+    "Habilitar análise com IA",
+    value=False
+)
+
+limite_analises_ia = st.sidebar.slider(
+    "Limite de notícias para analisar com IA",
+    min_value=1,
+    max_value=10,
+    value=3,
+    step=1
+)
+
+if usar_ia:
+    if openai_disponivel():
+        st.sidebar.success("IA habilitada com chave segura.")
+    else:
+        st.sidebar.error("OPENAI_API_KEY não encontrada no Secrets.")
 
 # ============================================================
 # TERMOS FINAIS
@@ -349,18 +406,19 @@ with col3:
         f"""
         <div class="metric-card">
             <div class="metric-label">Período</div>
-            <div class="metric-value">{dias_periodo}</div>
+            <div class="metric-value">{dias_periodo} dias</div>
         </div>
         """,
         unsafe_allow_html=True
     )
 
 with col4:
+    status_ia = "IA On" if usar_ia else "Online"
     st.markdown(
-        """
+        f"""
         <div class="metric-card">
             <div class="metric-label">Status</div>
-            <div class="metric-value">Online</div>
+            <div class="metric-value">{status_ia}</div>
         </div>
         """,
         unsafe_allow_html=True
@@ -385,6 +443,10 @@ if st.button("🚀 Buscar Atualizações", use_container_width=True):
         st.error("A data inicial não pode ser maior que a data final.")
         st.stop()
 
+    if usar_ia and not openai_disponivel():
+        st.error("A IA está habilitada, mas a OPENAI_API_KEY não foi configurada no Secrets.")
+        st.stop()
+
     todos_resultados = []
 
     with st.spinner("Buscando atualizações em fontes públicas..."):
@@ -396,7 +458,10 @@ if st.button("🚀 Buscar Atualizações", use_container_width=True):
                 f'{termo_principal} site:camara.leg.br',
                 f'{termo_principal} site:senado.leg.br',
                 f'{termo_principal} Receita Federal Reforma Tributária',
-                f'{termo_principal} Nota Técnica Reforma Tributária'
+                f'{termo_principal} Nota Técnica Reforma Tributária',
+                f'{termo_principal} Valor Econômico',
+                f'{termo_principal} JOTA',
+                f'{termo_principal} Contábeis'
             ]
 
             for consulta in consultas_web:
@@ -428,6 +493,9 @@ if st.button("🚀 Buscar Atualizações", use_container_width=True):
     else:
         df = df.drop_duplicates(subset=["Título", "Link"])
         df = df.sort_values(by=["Score", "Título"], ascending=[False, True])
+        df = df.reset_index(drop=True)
+
+        st.session_state["df_resultados"] = df
 
         st.success(f"{len(df)} atualizações encontradas.")
 
@@ -459,6 +527,29 @@ if st.button("🚀 Buscar Atualizações", use_container_width=True):
             },
             disabled=True
         )
+
+        if usar_ia:
+            st.subheader("🤖 Análise das notícias com IA")
+
+            df_ia = df.head(limite_analises_ia)
+
+            for idx, row in df_ia.iterrows():
+                with st.expander(f"Analisar: {row['Título']}", expanded=False):
+                    st.write(row["Resumo"])
+                    st.write(row["Link"])
+
+                    if st.button("Gerar resumo com IA", key=f"ia_{idx}"):
+                        with st.spinner("Analisando notícia com IA..."):
+                            try:
+                                analise = analisar_noticia_com_ia(
+                                    titulo=row["Título"],
+                                    resumo=row["Resumo"],
+                                    link=row["Link"],
+                                    termos_encontrados=row["Termos encontrados"]
+                                )
+                                st.markdown(analise)
+                            except Exception as e:
+                                st.error(f"Erro ao analisar com IA: {e}")
 
         st.subheader("📊 Temas mais encontrados")
 
