@@ -18,7 +18,17 @@ st.set_page_config(
     layout="wide"
 )
 
-SENHA_APP = ("TAX2026")
+SENHA_APP = st.secrets.get("APP_PASSWORD", "TAX2026")
+
+# ============================================================
+# SESSION STATE
+# ============================================================
+
+if "df_resultados" not in st.session_state:
+    st.session_state["df_resultados"] = pd.DataFrame()
+
+if "analises_ia" not in st.session_state:
+    st.session_state["analises_ia"] = {}
 
 # ============================================================
 # TERMOS E FONTES
@@ -162,8 +172,7 @@ def calcular_relevancia(texto, termos):
         if termo.lower() in texto_lower:
             encontrados.append(termo)
 
-    score = len(encontrados)
-    return score, ", ".join(encontrados)
+    return len(encontrados), ", ".join(encontrados)
 
 
 def buscar_rss(feed_url, data_inicio, data_fim, termos):
@@ -244,7 +253,7 @@ def buscar_ddgs(query, termos, max_results=20):
 
 
 def openai_disponivel():
-    return "OPENAI_API_KEY" in st.secrets and st.secrets["OPENAI_API_KEY"]
+    return "OPENAI_API_KEY" in st.secrets and bool(st.secrets["OPENAI_API_KEY"])
 
 
 def analisar_noticia_com_ia(titulo, resumo, link, termos_encontrados):
@@ -295,7 +304,6 @@ def analisar_noticia_com_ia(titulo, resumo, link, termos_encontrados):
     )
 
     return resposta.choices[0].message.content
-
 
 # ============================================================
 # SIDEBAR
@@ -443,10 +451,7 @@ if st.button("🚀 Buscar Atualizações", use_container_width=True):
         st.error("A data inicial não pode ser maior que a data final.")
         st.stop()
 
-    if usar_ia and not openai_disponivel():
-        st.error("A IA está habilitada, mas a OPENAI_API_KEY não foi configurada no Secrets.")
-        st.stop()
-
+    st.session_state["analises_ia"] = {}
     todos_resultados = []
 
     with st.spinner("Buscando atualizações em fontes públicas..."):
@@ -489,6 +494,7 @@ if st.button("🚀 Buscar Atualizações", use_container_width=True):
     df = pd.DataFrame(todos_resultados)
 
     if df.empty:
+        st.session_state["df_resultados"] = pd.DataFrame()
         st.warning("Nenhuma atualização encontrada para os filtros selecionados.")
     else:
         df = df.drop_duplicates(subset=["Título", "Link"])
@@ -497,48 +503,60 @@ if st.button("🚀 Buscar Atualizações", use_container_width=True):
 
         st.session_state["df_resultados"] = df
 
-        st.success(f"{len(df)} atualizações encontradas.")
+# ============================================================
+# EXIBIÇÃO DOS RESULTADOS
+# ============================================================
 
-        c1, c2, c3 = st.columns(3)
+df = st.session_state["df_resultados"]
 
-        with c1:
-            st.metric("Resultados", len(df))
+if not df.empty:
+    st.success(f"{len(df)} atualizações encontradas.")
 
-        with c2:
-            st.metric("Maior score", int(df["Score"].max()))
+    c1, c2, c3 = st.columns(3)
 
-        with c3:
-            st.metric("Fontes com resultado", df["Fonte"].nunique())
+    with c1:
+        st.metric("Resultados", len(df))
 
-        st.subheader("📰 Resultados encontrados")
+    with c2:
+        st.metric("Maior score", int(df["Score"].max()))
 
-        st.data_editor(
-            df,
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "Link": st.column_config.LinkColumn("Abrir link"),
-                "Resumo": st.column_config.TextColumn("Resumo", width="large"),
-                "Score": st.column_config.ProgressColumn(
-                    "Score",
-                    min_value=0,
-                    max_value=max(5, int(df["Score"].max()))
-                )
-            },
-            disabled=True
-        )
+    with c3:
+        st.metric("Fontes com resultado", df["Fonte"].nunique())
 
-        if usar_ia:
-            st.subheader("🤖 Análise das notícias com IA")
+    st.subheader("📰 Resultados encontrados")
 
+    st.data_editor(
+        df,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Link": st.column_config.LinkColumn("Abrir link"),
+            "Resumo": st.column_config.TextColumn("Resumo", width="large"),
+            "Score": st.column_config.ProgressColumn(
+                "Score",
+                min_value=0,
+                max_value=max(5, int(df["Score"].max()))
+            )
+        },
+        disabled=True
+    )
+
+    if usar_ia:
+        st.subheader("🤖 Análise das notícias com IA")
+
+        if not openai_disponivel():
+            st.error("OPENAI_API_KEY não encontrada no Secrets.")
+        else:
             df_ia = df.head(limite_analises_ia)
 
             for idx, row in df_ia.iterrows():
+                chave_analise = f"analise_ia_{idx}"
+
                 with st.expander(f"Analisar: {row['Título']}", expanded=False):
                     st.write(row["Resumo"])
                     st.write(row["Link"])
 
-                    if st.button("Gerar resumo com IA", key=f"ia_{idx}"):
+                    if st.button("Gerar resumo com IA", key=f"btn_ia_{idx}"):
                         with st.spinner("Analisando notícia com IA..."):
                             try:
                                 analise = analisar_noticia_com_ia(
@@ -547,24 +565,29 @@ if st.button("🚀 Buscar Atualizações", use_container_width=True):
                                     link=row["Link"],
                                     termos_encontrados=row["Termos encontrados"]
                                 )
-                                st.markdown(analise)
+
+                                st.session_state["analises_ia"][chave_analise] = analise
+
                             except Exception as e:
                                 st.error(f"Erro ao analisar com IA: {e}")
 
-        st.subheader("📊 Temas mais encontrados")
+                    if chave_analise in st.session_state["analises_ia"]:
+                        st.markdown(st.session_state["analises_ia"][chave_analise])
 
-        termos_lista = []
+    st.subheader("📊 Temas mais encontrados")
 
-        for item in df["Termos encontrados"]:
-            for termo in str(item).split(","):
-                termo = termo.strip()
-                if termo:
-                    termos_lista.append(termo)
+    termos_lista = []
 
-        if termos_lista:
-            df_termos = pd.Series(termos_lista).value_counts().reset_index()
-            df_termos.columns = ["Termo", "Ocorrências"]
-            st.bar_chart(df_termos.set_index("Termo"))
+    for item in df["Termos encontrados"]:
+        for termo in str(item).split(","):
+            termo = termo.strip()
+            if termo:
+                termos_lista.append(termo)
+
+    if termos_lista:
+        df_termos = pd.Series(termos_lista).value_counts().reset_index()
+        df_termos.columns = ["Termo", "Ocorrências"]
+        st.bar_chart(df_termos.set_index("Termo"))
 
 st.divider()
 
